@@ -4,9 +4,9 @@ pipeline {
 
   parameters {
     string(name:'AWS_REGION',  defaultValue:'eu-west-2', description:'AWS region')
-    string(name:'ACCOUNT_ID',  defaultValue:'<YOUR_12_DIGIT_ACCOUNT_ID>', description:'AWS account id')
+    string(name:'ACCOUNT_ID',  defaultValue:'430006376054', description:'AWS account id')
     string(name:'ECR_REPO',    defaultValue:'mobile-price-pred', description:'ECR repo name')
-    string(name:'EC2_HOST',    defaultValue:'3.8.37.28', description:'EC2 public IP/DNS')
+    string(name:'EC2_HOST',    defaultValue:'18.175.251.68', description:'EC2 public IP/DNS')
     string(name:'EC2_USER',    defaultValue:'ubuntu', description:'ubuntu or ec2-user')
     string(name:'APP_PORT',    defaultValue:'8080', description:'container exposes this port')
   }
