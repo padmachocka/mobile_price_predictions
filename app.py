@@ -46,10 +46,6 @@ class MobileFeatures(BaseModel):
     touch_screen: int
     wifi: int
 
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
 @app.get("/")
 def root():
     return {"ok": True, "service": "mobile-price"}
