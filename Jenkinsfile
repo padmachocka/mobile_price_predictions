@@ -62,10 +62,10 @@ pipeline {
               docker pull ${env.ECR_URI}:latest
               docker rm -f ${params.CONTAINER_NAME} || true
 
-              docker run -d --name ${params.CONTAINER_NAME} --restart unless-stopped \
-                -p ${params.HOST_PORT}:${params.CONTAINER_PORT} \
-                --env-file /opt/mobile-price/app.env \
-                ${env.ECR_URI}:latest
+              docker run -d --name ${CONTAINER_NAME} --restart unless-stopped \
+                -e MODEL_PATH=/app/best_xgb_model.pkl \
+                -p ${HOST_PORT}:${CONTAINER_PORT} \
+                ${ECR_URI}:latest
 
               sleep 3
               curl -sf http://localhost:${params.HOST_PORT}/health || true
