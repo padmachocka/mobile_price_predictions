@@ -9,6 +9,7 @@ pipeline {
     string(name:'EC2_HOST',    defaultValue:'18.175.251.68', description:'EC2 public IP/DNS')
     string(name:'EC2_USER',    defaultValue:'ubuntu', description:'ubuntu or ec2-user')
     string(name:'APP_PORT',    defaultValue:'8080', description:'container exposes this port')
+    string(name:'CONTAINER_NAME', defaultValue:'mobile-price-app')
   }
 
   environment {
@@ -41,33 +42,28 @@ pipeline {
       }
     }
 
-    stage('Deploy to EC2') {
-      steps {
-        sshagent(credentials: ['ec2-ssh-key']) {
-          sh """
-            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
-              set -e
-              # login to ECR and pull latest
-              aws ecr get-login-password --region ${params.AWS_REGION} \
-                | docker login --username AWS --password-stdin ${params.ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+   stage('Deploy to EC2') {
+  steps {
+    sshagent(credentials: ['ec2-ssh-key']) {
+      sh """
+        ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+          set -e
+          aws ecr get-login-password --region ${params.AWS_REGION} \
+            | docker login --username AWS --password-stdin ${params.ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
 
-              docker pull ${env.ECR_URI}:latest
+          docker pull ${env.ECR_URI}:latest
+          docker rm -f ${params.CONTAINER_NAME} || true
 
-              # stop and replace existing container
-              docker rm -f mobile-price || true
+          docker run -d --name ${params.CONTAINER_NAME} --restart unless-stopped \
+            -p ${params.APP_PORT}:${params.APP_PORT} \
+            --env-file /opt/mobile-price/app.env \
+            ${env.ECR_URI}:latest
 
-              docker run -d --name mobile-price --restart unless-stopped \
-                -p ${params.APP_PORT}:${params.APP_PORT} \
-                --env-file /opt/mobile-price/app.env \
-                ${env.ECR_URI}:latest
-
-              # simple health check (adjust your endpoint if different)
-              sleep 3
-              curl -sSf http://localhost:${params.APP_PORT}/health || true
-            '
-          """
-        }
-      }
+          sleep 3
+          curl -sf http://localhost:${params.APP_PORT}/health || true
+        '
+      """
     }
   }
+}  }
 }
