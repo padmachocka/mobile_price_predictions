@@ -1,32 +1,73 @@
 pipeline {
   agent any
-  environment {
-    APP_NAME = "mobile-price-app"
-    IMAGE_TAG = "latest"
+  options { timestamps(); ansiColor('xterm') }
+
+  parameters {
+    string(name:'AWS_REGION',  defaultValue:'eu-west-2', description:'AWS region')
+    string(name:'ACCOUNT_ID',  defaultValue:'<YOUR_12_DIGIT_ACCOUNT_ID>', description:'AWS account id')
+    string(name:'ECR_REPO',    defaultValue:'mobile-price-pred', description:'ECR repo name')
+    string(name:'EC2_HOST',    defaultValue:'3.8.37.28', description:'EC2 public IP/DNS')
+    string(name:'EC2_USER',    defaultValue:'ubuntu', description:'ubuntu or ec2-user')
+    string(name:'APP_PORT',    defaultValue:'8080', description:'container exposes this port')
   }
+
+  environment {
+    ECR_URI   = "${params.ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com/${params.ECR_REPO}"
+    IMAGE_TAG = "build-${env.BUILD_NUMBER}"
+  }
+
   stages {
     stage('Checkout') { steps { checkout scm } }
 
     stage('Build image') {
+      steps { sh "docker build -t ${env.ECR_URI}:${env.IMAGE_TAG} ." }
+    }
+
+    stage('Push to ECR') {
       steps {
-        sh 'docker version'
-        sh 'docker build -t ${APP_NAME}:${IMAGE_TAG} .'
+        withCredentials([[$class:'AmazonWebServicesCredentialsBinding', credentialsId:'aws-creds']]) {
+          sh """
+            aws ecr get-login-password --region ${params.AWS_REGION} \
+              | docker login --username AWS --password-stdin ${params.ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+
+            aws ecr describe-repositories --repository-names ${params.ECR_REPO} --region ${params.AWS_REGION} \
+              || aws ecr create-repository --repository-name ${params.ECR_REPO} --region ${params.AWS_REGION}
+
+            docker push ${env.ECR_URI}:${env.IMAGE_TAG}
+            docker tag ${env.ECR_URI}:${env.IMAGE_TAG} ${env.ECR_URI}:latest
+            docker push ${env.ECR_URI}:latest
+          """
+        }
       }
     }
 
-    stage('Deploy') {
+    stage('Deploy to EC2') {
       steps {
-        sh '''
-          docker rm -f ${APP_NAME} || true
-          docker run -d --name ${APP_NAME} -p 8000:8000 ${APP_NAME}:${IMAGE_TAG}
-          sleep 3
-          curl -sf http://localhost:8000/health || (docker logs ${APP_NAME} && exit 1)
-        '''
+        sshagent(credentials: ['ec2-ssh-key']) {
+          sh """
+            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+              set -e
+              # login to ECR and pull latest
+              aws ecr get-login-password --region ${params.AWS_REGION} \
+                | docker login --username AWS --password-stdin ${params.ACCOUNT_ID}.dkr.ecr.${params.AWS_REGION}.amazonaws.com
+
+              docker pull ${env.ECR_URI}:latest
+
+              # stop and replace existing container
+              docker rm -f mobile-price || true
+
+              docker run -d --name mobile-price --restart unless-stopped \
+                -p ${params.APP_PORT}:${params.APP_PORT} \
+                --env-file /opt/mobile-price/app.env \
+                ${env.ECR_URI}:latest
+
+              # simple health check (adjust your endpoint if different)
+              sleep 3
+              curl -sSf http://localhost:${params.APP_PORT}/health || true
+            '
+          """
+        }
       }
     }
-  }
-  post {
-    always { sh 'docker ps -a || true' }
-    success { echo "Deployed. Test: http://<EC2-PUBLIC-IP>:8000/health" }
   }
 }
