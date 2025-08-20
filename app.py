@@ -101,36 +101,32 @@ def predict(items: Union[MobileFeatures, List[MobileFeatures]]):
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
 
-      try:
+    try:
         df = add_engineered_features(df)
 
-        # === align to the model's expected features (and fail fast if mismatched) ===
-        expected = _expected_feature_names(model)
-        if expected:
-            missing_for_model = [c for c in expected if c not in df.columns]
-            extra_vs_model    = [c for c in df.columns if c not in expected]
-            if missing_for_model:
-                # This is the usual reason for "always class 3"
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": "Feature mismatch between training and serving.",
-                        "missing_for_model": missing_for_model,
-                        "extra_vs_model": extra_vs_model
-                    }
-                )
-            # Reorder to exactly what the model was trained on
-            df = df[expected]
-        else:
-            # Fall back to your constant as a best effort
-            df = df[MODEL_COLS]
+        # === DEBUGGING START ===
+        try:
+            expected = getattr(model, "feature_names_in_", None)
+            if expected is None:
+                booster = getattr(model, "get_booster", lambda: None)()
+                expected = getattr(booster, "feature_names", None)
+            print("EXPECTED FEATURES:", expected)
+        except Exception as e:
+            print("Could not read model feature names:", e)
 
-        # Optional: quick sanity log (check docker logs)
-        print("PREDICT SHAPE:", df.shape)
-        print("COLUMNS USED:", list(df.columns))
+        print("INFERENCE COLUMNS:", list(df.columns))
+        print("SAMPLE ROW:", df.iloc[0].to_dict())
+
+        if expected is not None:
+            missing = [c for c in expected if c not in df.columns]
+            extra   = [c for c in df.columns if c not in expected]
+            print("MISSING for model:", missing)
+            print("EXTRA vs model:", extra)
+            if not missing:
+                df = df[expected]
+        # === DEBUGGING END ===
 
         preds = model.predict(df)
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
 
