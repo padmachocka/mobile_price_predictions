@@ -78,6 +78,28 @@ def predict(items: Union[MobileFeatures, List[MobileFeatures]]):
 
     try:
         df = add_engineered_features(df)
+         # === DEBUGGING START ===
+        try:
+            expected = getattr(model, "feature_names_in_", None)
+            if expected is None:
+                booster = getattr(model, "get_booster", lambda: None)()
+                expected = getattr(booster, "feature_names", None)
+            print("EXPECTED FEATURES:", expected)
+        except Exception as e:
+            print("Could not read model feature names:", e)
+
+        print("INFERENCE COLUMNS:", list(df.columns))
+        print("SAMPLE ROW:", df.iloc[0].to_dict())
+
+        if expected is not None:
+            missing = [c for c in expected if c not in df.columns]
+            extra   = [c for c in df.columns if c not in expected]
+            print("MISSING for model:", missing)
+            print("EXTRA vs model:", extra)
+            if not missing:
+                df = df[expected]
+        # === DEBUGGING END ===
+
         preds = model.predict(df)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
