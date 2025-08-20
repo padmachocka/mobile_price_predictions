@@ -45,6 +45,56 @@ class MobileFeatures(BaseModel):
     three_g: int
     touch_screen: int
     wifi: int
+from typing import Optional
+
+def _expected_feature_names(model) -> Optional[list]:
+    names = getattr(model, "feature_names_in_", None)
+    if names is not None:
+        return list(names)
+    booster = getattr(model, "get_booster", lambda: None)()
+    if booster is not None:
+        try:
+            return list(getattr(booster, "feature_names", None) or [])
+        except Exception:
+            pass
+    return None
+
+@app.get("/debug/model-info")
+def debug_model_info():
+    exp = _expected_feature_names(model)
+    classes = getattr(model, "classes_", None)
+    params = getattr(model, "get_xgb_params", lambda: {})()
+    return {
+        "model_path": MODEL_PATH,
+        "expected_features": exp,
+        "classes_": list(map(int, classes)) if classes is not None else None,
+        "xgb_params": params
+    }
+
+@app.post("/debug/predict-proba")
+def debug_predict_proba(items: Union[MobileFeatures, List[MobileFeatures]]):
+    payload = [items.model_dump()] if isinstance(items, MobileFeatures) else [i.model_dump() for i in items]
+    df = pd.DataFrame(payload)
+    df = add_engineered_features(df)
+
+    # Align to model feature order if available
+    expected = _expected_feature_names(model)
+    if expected:
+        missing = [c for c in expected if c not in df.columns]
+        if missing:
+            raise HTTPException(status_code=500, detail={"error":"Feature mismatch", "missing":missing})
+        df = df[expected]
+
+    # Return predicted class + full probabilities
+    try:
+        proba = model.predict_proba(df)
+        preds = model.predict(df)
+        return {
+            "predicted_class": [int(x) for x in preds],
+            "proba": proba.tolist()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"predict_proba error: {e}")
 
 @app.get("/")
 def root():
