@@ -37,8 +37,6 @@ pipeline {
           . .venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
-          # Runs pipeline.py which must save the pipeline artifact at repo root:
-          #   with open("${params.MODEL_FILE}", "wb") as f: pickle.dump(best_pipe, f)
           python pipeline.py
           test -f ${params.MODEL_FILE}
           ls -lh ${params.MODEL_FILE}
@@ -51,7 +49,6 @@ pipeline {
       steps {
         sh """
           set -e
-          # Ensure the model file is not ignored by .dockerignore
           test -f ${params.MODEL_FILE}
           docker build -t ${IMAGE} .
         """
@@ -97,13 +94,11 @@ pipeline {
               sudo docker pull ${IMAGE}
               sudo docker rm -f ${params.CONTAINER_NAME} || true
 
-              # Run new container (publish HOST_PORT -> CONTAINER_PORT)
               sudo docker run -d --name ${params.CONTAINER_NAME} --restart unless-stopped \
                 -e MODEL_PATH=/app/${params.MODEL_FILE} \
                 -p ${params.HOST_PORT}:${params.CONTAINER_PORT} \
                 ${IMAGE}
 
-              # Quick health probe on host port (mapped to container)
               for i in {1..10}; do
                 sleep 3
                 if curl -fsS http://127.0.0.1:${params.HOST_PORT}/health >/dev/null; then
@@ -117,6 +112,24 @@ pipeline {
             '
           """
         }
+      }
+    }
+
+    stage('Smoke test API') {
+      environment {
+        BASE_URL = "http://${params.EC2_HOST}:${params.HOST_PORT}"
+      }
+      steps {
+        sh '''
+          set -e
+          docker run --rm \
+            -e BASE_URL="${BASE_URL}" \
+            -v "$PWD":/work -w /work \
+            python:3.10-slim sh -c "
+              pip install --no-cache-dir pytest requests &&
+              pytest -v --maxfail=1 --disable-warnings tests/test_api_smoke.py
+            "
+        '''
       }
     }
   }
