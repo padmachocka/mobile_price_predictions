@@ -66,6 +66,31 @@ def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     df["ppi"] = df["ppi"].fillna(0.0)
 
     return df[MODEL_COLS]
+from typing import Optional
+
+def _expected_feature_names(model) -> Optional[list]:
+    # Try sklearn-style first
+    names = getattr(model, "feature_names_in_", None)
+    if names is not None:
+        return list(names)
+    # Fall back to XGBoost booster feature names
+    booster = getattr(model, "get_booster", lambda: None)()
+    if booster is not None:
+        try:
+            return list(getattr(booster, "feature_names", None) or [])
+        except Exception:
+            pass
+    return None
+
+@app.get("/debug/model-info")
+def debug_model_info():
+    exp = _expected_feature_names(model)
+    return {
+        "model_path": MODEL_PATH,
+        "expected_features": exp,
+        "model_cols_constant": MODEL_COLS,
+        "note": "expected_features is what the loaded model wants, in order."
+    }
 
 @app.post("/predict")
 def predict(items: Union[MobileFeatures, List[MobileFeatures]]):
@@ -76,31 +101,36 @@ def predict(items: Union[MobileFeatures, List[MobileFeatures]]):
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
 
-    try:
+      try:
         df = add_engineered_features(df)
-         # === DEBUGGING START ===
-        try:
-            expected = getattr(model, "feature_names_in_", None)
-            if expected is None:
-                booster = getattr(model, "get_booster", lambda: None)()
-                expected = getattr(booster, "feature_names", None)
-            print("EXPECTED FEATURES:", expected)
-        except Exception as e:
-            print("Could not read model feature names:", e)
 
-        print("INFERENCE COLUMNS:", list(df.columns))
-        print("SAMPLE ROW:", df.iloc[0].to_dict())
+        # === align to the model's expected features (and fail fast if mismatched) ===
+        expected = _expected_feature_names(model)
+        if expected:
+            missing_for_model = [c for c in expected if c not in df.columns]
+            extra_vs_model    = [c for c in df.columns if c not in expected]
+            if missing_for_model:
+                # This is the usual reason for "always class 3"
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": "Feature mismatch between training and serving.",
+                        "missing_for_model": missing_for_model,
+                        "extra_vs_model": extra_vs_model
+                    }
+                )
+            # Reorder to exactly what the model was trained on
+            df = df[expected]
+        else:
+            # Fall back to your constant as a best effort
+            df = df[MODEL_COLS]
 
-        if expected is not None:
-            missing = [c for c in expected if c not in df.columns]
-            extra   = [c for c in df.columns if c not in expected]
-            print("MISSING for model:", missing)
-            print("EXTRA vs model:", extra)
-            if not missing:
-                df = df[expected]
-        # === DEBUGGING END ===
+        # Optional: quick sanity log (check docker logs)
+        print("PREDICT SHAPE:", df.shape)
+        print("COLUMNS USED:", list(df.columns))
 
         preds = model.predict(df)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {e}")
 
